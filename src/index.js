@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 const axios = require('axios');
 require('dotenv').config();
@@ -38,9 +37,10 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log('\n=== ESCANEIE O QR CODE ===');
-            qrcode.generate(qr, { small: true });
-            console.log('=========================\n');
+            console.log('\n=== QR CODE DO WHATSAPP ===');
+            console.log('Escaneie este QR Code:');
+            console.log(qr);
+            console.log('========================\n');
             connectionState = 'qr_ready';
         }
 
