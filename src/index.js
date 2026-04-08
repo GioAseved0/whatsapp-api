@@ -23,13 +23,17 @@ const logger = pino({ level: 'info' });
 
 // Função para conectar ao WhatsApp
 async function connectToWhatsApp() {
+    console.log('🔄 Iniciando conexão WhatsApp...');
+
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    console.log('📦 Estado de auth carregado');
 
     sock = makeWASocket({
-        logger: pino({ level: 'silent' }),
+        logger: pino({ level: 'warn' }),
         auth: state,
         printQRInTerminal: false
     });
+    console.log('📡 Socket criado, aguardando conexão...');
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -46,10 +50,16 @@ async function connectToWhatsApp() {
 
         if (connection === 'close') {
             connectionState = 'disconnected';
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Conexão fechada. Reconectando...', shouldReconnect);
+            const statusCode = (lastDisconnect.error)?.output?.statusCode;
+            const reason = DisconnectReason[statusCode];
+            console.log('Conexão fechada. Código:', statusCode, 'Motivo:', reason);
+
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
-                connectToWhatsApp();
+                console.log('Tentando reconectar em 3 segundos...');
+                setTimeout(connectToWhatsApp, 3000);
+            } else {
+                console.log('Não reconectar (logged out)');
             }
         } else if (connection === 'open') {
             connectionState = 'connected';
