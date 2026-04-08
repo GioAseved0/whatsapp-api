@@ -1,0 +1,61 @@
+{
+  "name": "Enviar Ofertas WhatsApp",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start-node",
+      "name": "When clicking \"Execute workflow\"",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.api_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $json.auth_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"groupId\": \"{{ $json.group_id }}\",\n  \"message\": \"{{ $json.message }}\"\n}"
+      },
+      "id": "http-request",
+      "name": "Enviar para WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 300]
+    }
+  ],
+  "connections": {
+    "When clicking \"Execute workflow\"": {
+      "main": [
+        [
+          {
+            "node": "Enviar para WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Sao_Paulo"
+  },
+  "staticData": {
+    "api_url": "https://sua-api.onrender.com/send-group",
+    "auth_token": "ofertas_bot_token_2026",
+    "group_id": "SEU_GRUPO_ID@g.us"
+  }
+}
