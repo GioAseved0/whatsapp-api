@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const pino = require('pino');
+const venom = require('venom-bot');
 const axios = require('axios');
 require('dotenv').config();
 
@@ -14,86 +13,64 @@ const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 const AUTH_TOKEN = process.env.AUTH_TOKEN || 'default-token';
 
 // Estado da conexão
-let sock;
+let client = null;
 let connectionState = 'disconnected';
 let phoneNumber = null;
 
-// Logger
-const logger = pino({ level: 'info' });
+// Criar cliente WhatsApp
+async function startWhatsApp() {
+    console.log('🔄 Iniciando WhatsApp...');
 
-// Função para conectar ao WhatsApp
-async function connectToWhatsApp() {
-    console.log('🔄 Iniciando conexão WhatsApp...');
+    try {
+        client = await venom.create({
+            session: 'ofertas',
+            headless: false,  // Abre navegador visível
+            logQR: true,
+            catchQR: (base64Qr, asciiQR) => {
+                console.log('\n=== QR CODE ===');
+                console.log(asciiQR);
+                console.log('===============\n');
+            },
+            statusFind: (status) => {
+                console.log('📡 Status:', status);
+                if (status === 'connected') {
+                    connectionState = 'connected';
+                }
+            },
+            browserArgs: [
+                '--no-sandbox',
+                '--disable-dev-shm-usage'
+            ]
+        });
 
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    console.log('📦 Estado de auth carregado');
+        client.onMessage(async (message) => {
+            if (message.isGroupMsg || message.fromMe) return;
 
-    sock = makeWASocket({
-        logger: pino({ level: 'warn' }),
-        auth: state,
-        printQRInTerminal: false
-    });
-    console.log('📡 Socket criado, aguardando conexão...');
+            const fromNumber = message.from.split('@')[0];
+            const messageText = message.body;
 
-    sock.ev.on('creds.update', saveCreds);
+            console.log(`📨 Mensagem de ${fromNumber}: ${messageText}`);
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        if (qr) {
-            console.log('\n=== QR CODE DO WHATSAPP ===');
-            console.log('Escaneie este QR Code:');
-            console.log(qr);
-            console.log('========================\n');
-            connectionState = 'qr_ready';
-        }
-
-        if (connection === 'close') {
-            connectionState = 'disconnected';
-            const statusCode = (lastDisconnect.error)?.output?.statusCode;
-            const reason = DisconnectReason[statusCode];
-            console.log('Conexão fechada. Código:', statusCode, 'Motivo:', reason);
-
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                console.log('Tentando reconectar em 3 segundos...');
-                setTimeout(connectToWhatsApp, 3000);
-            } else {
-                console.log('Não reconectar (logged out)');
+            if (N8N_WEBHOOK_URL && messageText) {
+                try {
+                    await axios.post(N8N_WEBHOOK_URL, {
+                        from: fromNumber,
+                        message: messageText,
+                        timestamp: new Date().toISOString()
+                    });
+                    console.log('✅ Mensagem enviada para n8n');
+                } catch (error) {
+                    console.error('❌ Erro ao enviar para n8n:', error.message);
+                }
             }
-        } else if (connection === 'open') {
-            connectionState = 'connected';
-            const user = sock.user;
-            phoneNumber = user?.id?.split('@')[0];
-            console.log('✅ WhatsApp conectado! Número:', phoneNumber);
-        }
-    });
+        });
 
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
+        console.log('✅ WhatsApp pronto para conectar!');
 
-        const msg = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
-
-        const fromNumber = msg.key.remoteJid?.split('@')[0];
-        const messageText = msg.conversation || msg.message?.extendedTextMessage?.text || '';
-
-        console.log(`📨 Mensagem de ${fromNumber}: ${messageText}`);
-
-        // Envia para o n8n
-        if (N8N_WEBHOOK_URL && messageText) {
-            try {
-                await axios.post(N8N_WEBHOOK_URL, {
-                    from: fromNumber,
-                    message: messageText,
-                    timestamp: new Date().toISOString()
-                });
-                console.log('✅ Mensagem enviada para n8n');
-            } catch (error) {
-                console.error('❌ Erro ao enviar para n8n:', error.message);
-            }
-        }
-    });
+    } catch (error) {
+        console.error('❌ Erro ao iniciar WhatsApp:', error.message);
+        connectionState = 'error';
+    }
 }
 
 // Middleware de autenticação
@@ -121,14 +98,13 @@ app.post('/send', authMiddleware, async (req, res) => {
         return res.status(400).json({ error: 'Campos "to" e "message" são obrigatórios' });
     }
 
-    if (connectionState !== 'connected') {
+    if (!client || connectionState !== 'connected') {
         return res.status(503).json({ error: 'WhatsApp não conectado' });
     }
 
     try {
         const jid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
-
-        await sock.sendMessage(jid, { text: message });
+        await client.sendText(jid, message);
 
         console.log(`✅ Mensagem enviada para ${to}`);
         res.json({ success: true, to });
@@ -145,14 +121,13 @@ app.post('/send-group', authMiddleware, async (req, res) => {
         return res.status(400).json({ error: 'Campos "groupId" e "message" são obrigatórios' });
     }
 
-    if (connectionState !== 'connected') {
+    if (!client || connectionState !== 'connected') {
         return res.status(503).json({ error: 'WhatsApp não conectado' });
     }
 
     try {
         const jid = groupId.includes('@') ? groupId : `${groupId}@g.us`;
-
-        await sock.sendMessage(jid, { text: message });
+        await client.sendText(jid, message);
 
         console.log(`✅ Mensagem enviada para grupo ${groupId}`);
         res.json({ success: true, groupId });
@@ -162,21 +137,17 @@ app.post('/send-group', authMiddleware, async (req, res) => {
     }
 });
 
-app.get('/qr', (req, res) => {
-    res.json({ status: connectionState, message: 'QR Code será exibido no terminal' });
-});
-
 app.get('/list-groups', authMiddleware, async (req, res) => {
-    if (connectionState !== 'connected') {
+    if (!client || connectionState !== 'connected') {
         return res.status(503).json({ error: 'WhatsApp não conectado' });
     }
 
     try {
-        const groups = await sock.groupFetchAllParticipating();
-        const groupList = Object.values(groups).map(g => ({
-            id: g.id,
-            name: g.subject,
-            participants: g.participants?.length || 0
+        const groups = await client.getAllGroups(false);
+        const groupList = groups.map(g => ({
+            id: g.id._serialized,
+            name: g.name,
+            participants: g.groupMetadata?.participants?.length || 0
         }));
 
         res.json({ success: true, groups: groupList });
@@ -189,5 +160,5 @@ app.get('/list-groups', authMiddleware, async (req, res) => {
 // Iniciar servidor
 app.listen(PORT, () => {
     console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
-    connectToWhatsApp();
+    startWhatsApp();
 });
